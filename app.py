@@ -169,5 +169,5 @@ if __name__ == '__main__':
         raise ValueError("GITHUB_WEBHOOK_SECRET is not set in .env file")
     
     logger.info("Starting server...")
-    logger.info("Webhook URL should be: <your-ngrok-url>")
+    logger.info("Webhook URL should be:")
     app.run(host='127.0.0.1', port=5000, debug=False)
