@@ -281,7 +281,7 @@ def home():
         logger.error(f"Error rendering dashboard: {str(e)}")
         return f"Error: {str(e)}", 500
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/', methods=['POST'])
 def handle_webhook():
     """
     Handle GitHub webhook events
