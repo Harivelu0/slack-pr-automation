@@ -281,7 +281,7 @@ def home():
         logger.error(f"Error rendering dashboard: {str(e)}")
         return f"Error: {str(e)}", 500
 
-@app.route('/', methods=['POST'])
+@app.route('/webhook', methods=['POST'])
 def handle_webhook():
     """
     Handle GitHub webhook events
@@ -435,6 +435,6 @@ if __name__ == '__main__':
         raise ValueError("SLACK_WEBHOOK_URL is not set in .env file")
     if not GITHUB_SECRET:
         raise ValueError("GITHUB_WEBHOOK_SECRET is not set in .env file")
-    
+    #added
     logger.info("Starting server...")
     app.run(host='0.0.0.0', port=5001, debug=False)
