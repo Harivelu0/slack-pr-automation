@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, jsonify
 import requests
 import os
 import hmac
@@ -20,7 +20,6 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
-app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 # Configuration
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
@@ -67,6 +66,10 @@ def send_slack_notification(title, text, fields=None, actions=None):
     Send a notification to the Slack webhook
     """
     try:
+        if not SLACK_WEBHOOK_URL:
+            logger.error("SLACK_WEBHOOK_URL not configured")
+            return False
+            
         blocks = [
             {
                 "type": "header",
@@ -133,14 +136,34 @@ def process_pull_request(data):
     try:
         db = DatabaseHandler()
         
+        # Check if database connection was successful
+        if hasattr(db, 'connection_failed') and db.connection_failed:
+            logger.error("Database connection failed, skipping PR processing")
+            return None
+            
         # Extract repository and user info
-        repo_data = data['repository']
-        user_data = data['pull_request']['user']
-        pr_data = data['pull_request']
+        repo_data = data.get('repository')
+        pr_data = data.get('pull_request')
+        
+        if not repo_data or not pr_data:
+            logger.error("Missing repository or PR data")
+            return None
+            
+        user_data = pr_data.get('user')
+        
+        if not user_data:
+            logger.error("Missing user data in PR")
+            return None
         
         # Store in database
         repo_id = db.get_or_create_repository(repo_data)
         user_id = db.get_or_create_user(user_data)
+        
+        if repo_id is None or user_id is None:
+            logger.error(f"Failed to get or create repository or user: repo_id={repo_id}, user_id={user_id}")
+            db.close()
+            return None
+            
         pr_id = db.get_or_create_pull_request(pr_data, repo_id, user_id)
         
         db.close()
@@ -156,17 +179,44 @@ def process_review(data):
     try:
         db = DatabaseHandler()
         
+        # Check if database connection was successful
+        if hasattr(db, 'connection_failed') and db.connection_failed:
+            logger.error("Database connection failed, skipping review processing")
+            return None
+            
         # Extract repository, user, PR, and review info
-        repo_data = data['repository']
-        user_data = data['review']['user']
-        pr_data = data['pull_request']
-        review_data = data['review']
+        repo_data = data.get('repository')
+        review_data = data.get('review')
+        pr_data = data.get('pull_request')
+        
+        if not repo_data or not review_data or not pr_data:
+            logger.error("Missing repository, review, or PR data")
+            return None
+            
+        reviewer_data = review_data.get('user')
+        pr_author_data = pr_data.get('user')
+        
+        if not reviewer_data or not pr_author_data:
+            logger.error("Missing reviewer or PR author data")
+            return None
         
         # Store in database
         repo_id = db.get_or_create_repository(repo_data)
-        reviewer_id = db.get_or_create_user(user_data)
-        pr_author_id = db.get_or_create_user(pr_data['user'])
+        reviewer_id = db.get_or_create_user(reviewer_data)
+        pr_author_id = db.get_or_create_user(pr_author_data)
+        
+        if repo_id is None or reviewer_id is None or pr_author_id is None:
+            logger.error("Failed to get or create repository, reviewer, or PR author")
+            db.close()
+            return None
+            
         pr_id = db.get_or_create_pull_request(pr_data, repo_id, pr_author_id)
+        
+        if pr_id is None:
+            logger.error("Failed to get or create pull request")
+            db.close()
+            return None
+            
         review_id = db.add_pr_review(review_data, pr_id, reviewer_id)
         
         db.close()
@@ -175,6 +225,54 @@ def process_review(data):
         logger.error(f"Error processing review: {str(e)}")
         return None
 
+def check_stale_prs():
+    """
+    Check for stale PRs and send notifications
+    """
+    try:
+        db = DatabaseHandler()
+        
+        # Check if database connection was successful
+        if hasattr(db, 'connection_failed') and db.connection_failed:
+            logger.error("Database connection failed, skipping stale PR check")
+            return
+            
+        newly_stale_pr_ids = db.check_for_stale_prs(STALE_PR_DAYS)
+        
+        if newly_stale_pr_ids:
+            stale_prs = db.get_stale_prs()
+            
+            if stale_prs:
+                # Notify about stale PRs
+                title = "🚨 Stale Pull Requests Detected"
+                text = f"The following pull requests have been inactive for {STALE_PR_DAYS} days:"
+                
+                fields = []
+                actions = []
+                
+                # Only include up to 10 PRs to avoid Slack message size limits
+                for i, pr in enumerate(stale_prs[:10]):
+                    pr_id, pr_title, pr_number, pr_url, repo_name, username, created_at, last_activity = pr
+                    
+                    days_inactive = (datetime.now() - last_activity).days if isinstance(last_activity, datetime) else '?'
+                    fields.append(f"*{repo_name} #{pr_number}*: {pr_title}")
+                    fields.append(f"Created by: {username} | Inactive for {days_inactive} days")
+                    
+                    actions.append({
+                        "text": f"View #{pr_number}",
+                        "url": pr_url
+                    })
+                
+                # If there are more than 10 stale PRs, add a note
+                if len(stale_prs) > 10:
+                    text += f"\n\n*Note: Showing 10 of {len(stale_prs)} stale PRs*"
+                
+                send_slack_notification(title, text, fields, actions)
+        
+        db.close()
+    except Exception as e:
+        logger.error(f"Error checking for stale PRs: {str(e)}")
+
 def process_review_comment(data):
     """
     Process pull request review comment and store in database
@@ -182,32 +280,52 @@ def process_review_comment(data):
     try:
         db = DatabaseHandler()
         
+        # Check if database connection was successful
+        if hasattr(db, 'connection_failed') and db.connection_failed:
+            logger.error("Database connection failed, skipping comment processing")
+            return None
+            
         # Extract repository, user, PR, and comment info
-        repo_data = data['repository']
-        user_data = data['comment']['user']
-        pr_data = data['pull_request']
-        comment_data = data['comment']
+        repo_data = data.get('repository')
+        comment_data = data.get('comment')
+        pr_data = data.get('pull_request')
+        
+        if not repo_data or not comment_data or not pr_data:
+            logger.error("Missing repository, comment, or PR data")
+            return None
+            
+        commenter_data = comment_data.get('user')
+        pr_author_data = pr_data.get('user')
+        
+        if not commenter_data or not pr_author_data:
+            logger.error("Missing commenter or PR author data")
+            return None
         
         # Store in database
         repo_id = db.get_or_create_repository(repo_data)
-        commenter_id = db.get_or_create_user(user_data)
-        pr_author_id = db.get_or_create_user(pr_data['user'])
+        commenter_id = db.get_or_create_user(commenter_data)
+        pr_author_id = db.get_or_create_user(pr_author_data)
+        
+        if repo_id is None or commenter_id is None or pr_author_id is None:
+            logger.error("Failed to get or create repository, commenter, or PR author")
+            db.close()
+            return None
+            
         pr_id = db.get_or_create_pull_request(pr_data, repo_id, pr_author_id)
+        
+        if pr_id is None:
+            logger.error("Failed to get or create pull request")
+            db.close()
+            return None
         
         # Check if this comment is associated with a review
         review_id = None
-        if 'pull_request_review_id' in comment_data:
-            # This is a review comment - need to find its review ID in our DB
-            # In a real implementation, you'd store a mapping of GitHub review IDs to your DB IDs
-            # For simplicity, we'll pass None here
+        if comment_data.get('pull_request_review_id'):
+            # In a real implementation, you might want to look up the review_id in your DB
+            # For simplicity, we'll pass None for now
             pass
         
         comment_id = db.add_review_comment(comment_data, pr_id, commenter_id, review_id)
-        
-        # Check if it contains a command and handle accordingly
-        if comment_data.get('contains_command'):
-            logger.info(f"Command detected in comment: {comment_data.get('command_type')}")
-            # You could add specific command handling here
         
         db.close()
         return comment_id
@@ -215,48 +333,7 @@ def process_review_comment(data):
         logger.error(f"Error processing review comment: {str(e)}")
         return None
 
-def check_stale_prs():
-    """
-    Check for stale PRs and send notifications
-    """
-    try:
-        db = DatabaseHandler()
-        newly_stale_pr_ids = db.check_for_stale_prs(STALE_PR_DAYS)
-        
-        if newly_stale_pr_ids:
-            stale_prs = db.get_stale_prs()
-            
-            # Notify about stale PRs
-            title = "🚨 Stale Pull Requests Detected"
-            text = f"The following pull requests have been inactive for {STALE_PR_DAYS} days:"
-            
-            fields = []
-            actions = []
-            
-            # Only include up to 10 PRs to avoid Slack message size limits
-            for i, pr in enumerate(stale_prs[:10]):
-                pr_id, pr_title, pr_number, pr_url, repo_name, username, created_at, last_activity = pr
-                
-                days_inactive = (datetime.utcnow() - last_activity).days
-                fields.append(f"*{repo_name} #{pr_number}*: {pr_title}")
-                fields.append(f"Created by: {username} | Inactive for {days_inactive} days")
-                
-                actions.append({
-                    "text": f"View #{pr_number}",
-                    "url": pr_url
-                })
-            
-            # If there are more than 10 stale PRs, add a note
-            if len(stale_prs) > 10:
-                text += f"\n\n*Note: Showing 10 of {len(stale_prs)} stale PRs*"
-            
-            send_slack_notification(title, text, fields, actions)
-        
-        db.close()
-    except Exception as e:
-        logger.error(f"Error checking for stale PRs: {str(e)}")
-
-# Background task for checking stale PRs weekly
+# Background task for checking stale PRs
 def stale_pr_checker():
     """Background thread to check for stale PRs on a schedule"""
     while True:
@@ -265,23 +342,16 @@ def stale_pr_checker():
         # Sleep for 1 day (86400 seconds)
         time.sleep(86400)
 
+# Route handlers
 @app.route('/', methods=['GET'])
-def home():
-    """Home page with dashboard"""
-    try:
-        db = DatabaseHandler()
-        metrics = db.get_pr_metrics()
-        db.close()
-        
-        # Inject current year for the template
-        current_year = datetime.now().year
-        
-        return render_template('dashboard.html', metrics=metrics, current_year=current_year)
-    except Exception as e:
-        logger.error(f"Error rendering dashboard: {str(e)}")
-        return f"Error: {str(e)}", 500
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    })
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/', methods=['POST'])
 def handle_webhook():
     """
     Handle GitHub webhook events
@@ -292,7 +362,7 @@ def handle_webhook():
     # Verify webhook signature
     if not verify_github_webhook(request):
         logger.error("Webhook verification failed")
-        return 'Invalid signature', 400
+        return jsonify({"error": "Invalid signature"}), 400
     
     try:
         data = request.get_json()
@@ -308,7 +378,7 @@ def handle_webhook():
                 pr_id = process_pull_request(data)
                 
                 # Send notification for new PRs
-                if action == 'opened':
+                if action == 'opened' and SLACK_WEBHOOK_URL:
                     pr = data['pull_request']
                     repo = data['repository']
                     
@@ -327,13 +397,13 @@ def handle_webhook():
                     
                     send_slack_notification(title, text, fields, actions)
                 
-                return 'PR processed', 200
+                return jsonify({"status": "success", "message": "PR processed"}), 200
                 
         elif event_type == 'pull_request_review':
             review_id = process_review(data)
             
             # Send notification for requested changes
-            if data['review']['state'] == 'changes_requested':
+            if data['review']['state'] == 'changes_requested' and SLACK_WEBHOOK_URL:
                 pr = data['pull_request']
                 review = data['review']
                 repo = data['repository']
@@ -354,87 +424,42 @@ def handle_webhook():
                 
                 send_slack_notification(title, text, fields, actions)
             
-            return 'Review processed', 200
+            return jsonify({"status": "success", "message": "Review processed"}), 200
             
         elif event_type == 'pull_request_review_comment':
             comment_id = process_review_comment(data)
-            return 'Comment processed', 200
+            return jsonify({"status": "success", "message": "Comment processed"}), 200
+        
+        # Handle ping event (GitHub sends this when webhook is first configured)
+        elif event_type == 'ping':
+            return jsonify({"status": "success", "message": "Pong!"}), 200
             
-        return 'Event received', 200
+        return jsonify({"status": "success", "message": "Event received"}), 200
         
     except Exception as e:
         logger.error(f"Error processing webhook: {str(e)}")
-        return 'Error processing webhook', 500
-
-@app.route('/stale', methods=['GET'])
-def stale_prs():
-    """
-    Display stale pull requests
-    """
-    try:
-        db = DatabaseHandler()
-        stale_prs = db.get_stale_prs()
-        
-        # Get unique repository names for the filter
-        repositories = set()
-        for pr in stale_prs:
-            repositories.add(pr[4])  # Repository name is at index 4
-        
-        db.close()
-        
-        return render_template(
-            'stale_prs.html', 
-            stale_prs=stale_prs, 
-            repositories=sorted(repositories),
-            stale_days=STALE_PR_DAYS,
-            now=datetime.utcnow(),
-            current_year=datetime.now().year
-        )
-    except Exception as e:
-        logger.error(f"Error displaying stale PRs: {str(e)}")
-        return f"Error: {str(e)}", 500
-
-@app.route('/metrics', methods=['GET'])
-def metrics_json():
-    """
-    Return metrics as JSON for API use
-    """
-    try:
-        db = DatabaseHandler()
-        metrics = db.get_pr_metrics()
-        db.close()
-        
-        # Convert DB rows to dictionaries for JSON serialization
-        result = {
-            'pr_authors': [{'username': row[0], 'count': row[1]} for row in metrics['pr_authors']],
-            'active_reviewers': [{'username': row[0], 'count': row[1]} for row in metrics['active_reviewers']],
-            'command_users': [{'username': row[0], 'count': row[1]} for row in metrics['command_users']],
-            'stale_pr_count': metrics['stale_pr_count']
-        }
-        
-        return jsonify(result)
-    except Exception as e:
-        logger.error(f"Error getting metrics: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# Regular route that GitHub pings to check service status
-@app.route('/', methods=['GET'])
-def index():
-    """
-    Provide a simple status page
-    """
-    return render_template('dashboard.html')
+        return jsonify({"error": f"Error processing webhook: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    # Start stale PR checker in a separate thread
-    checker_thread = threading.Thread(target=stale_pr_checker, daemon=True)
-    checker_thread.start()
-    
     # Verify environment variables
-    if not SLACK_WEBHOOK_URL:
-        raise ValueError("SLACK_WEBHOOK_URL is not set in .env file")
+    missing_vars = []
     if not GITHUB_SECRET:
-        raise ValueError("GITHUB_WEBHOOK_SECRET is not set in .env file")
-    #added
-    logger.info("Starting server...")
+        missing_vars.append("GITHUB_WEBHOOK_SECRET")
+    
+    if not os.getenv('DATABASE_CONNECTION_STRING'):
+        missing_vars.append("DATABASE_CONNECTION_STRING")
+    
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error("Please set these variables in your .env file")
+    
+    # Start stale PR checker in a separate thread if Slack webhook is configured
+    if SLACK_WEBHOOK_URL:
+        checker_thread = threading.Thread(target=stale_pr_checker, daemon=True)
+        checker_thread.start()
+        logger.info("Started stale PR checker thread")
+    else:
+        logger.warning("SLACK_WEBHOOK_URL not set, stale PR notifications disabled")
+    
+    logger.info("Starting GitHub webhook server...")
     app.run(host='0.0.0.0', port=5001, debug=False)
