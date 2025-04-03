@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import logging
 from datetime import datetime, timedelta
 import re
@@ -24,19 +23,49 @@ except ImportError as e:
     pyodbc = MockPyodbc()
 
 class DatabaseHandler:
+    
     def __init__(self):
-        """Initialize database connection using SQLite"""
+        """Initialize database connection using environment variables"""
         try:
-            # Hardcode the values for now (we'll fix the environment variables later)
-            if isinstance(pyodbc, type(None)):
-                raise ImportError("pyodbc module was not imported correctly")
-            server = "prequel-sql-server4955cfa8.database.windows.net"
-            database = "prequel-db"
-            username = "prequel_admin"
-            password = "H94f4pCV1NDntaj7JYVtWQ=="
+            # Import modules
+            import os
+            from dotenv import load_dotenv
             
-            # Build connection string for Azure SQL
-            conn_str = "Driver={ODBC Driver 17 for SQL Server};Server=tcp:prequel-sql-server4955cfa8.database.windows.net,1433;Database=prequel-db;Uid=prequel_admin;Pwd=H94f4pCV1NDntaj7JYVtWQ==;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"            
+            # Load environment variables from .env file
+            load_dotenv()
+            
+            # Get credentials from environment variables with no defaults
+            server = os.getenv("SQL_SERVER")
+            database = os.getenv("SQL_DATABASE")
+            username = os.getenv("SQL_USERNAME")
+            password = os.getenv("SQL_PASSWORD")
+            
+            # Check if any required environment variables are missing
+            missing_vars = []
+            if not server: missing_vars.append("SQL_SERVER")
+            if not database: missing_vars.append("SQL_DATABASE")
+            if not username: missing_vars.append("SQL_USERNAME")
+            if not password: missing_vars.append("SQL_PASSWORD")
+            
+            if missing_vars:
+                raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+            
+            logger.debug(f"Using database: {database} on server: {server}")
+            
+            # Build connection string
+            conn_str = (
+                f"Driver={{ODBC Driver 17 for SQL Server}};"
+                f"Server=tcp:{server},1433;"
+                f"Database={database};"
+                f"Uid={username};"
+                f"Pwd={password};"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=no;"
+                f"Connection Timeout=30;"
+            )
+            
+            logger.debug(f"Attempting to connect to database")
+            
             # Connect to database
             self.conn = pyodbc.connect(conn_str)
             self.cursor = self.conn.cursor()
@@ -45,9 +74,16 @@ class DatabaseHandler:
             # Initialize tables if they don't exist
             self._ensure_tables_exist()
             
+        except ValueError as e:
+            # Handle missing environment variables
+            logger.error(f"Environment variable error: {str(e)}")
+            self.conn = None
+            self.cursor = None
+            self.connection_failed = True
+            logger.warning("Using mock database functionality due to missing environment variables")
         except Exception as e:
+            # Handle other errors
             logger.error(f"Error connecting to database: {str(e)}")
-            # Set up a flag to indicate DB connection failed
             self.conn = None
             self.cursor = None
             self.connection_failed = True
@@ -376,65 +412,45 @@ class DatabaseHandler:
             if hasattr(self, 'conn') and self.conn:
                 self.conn.rollback()
             return None
-        def add_pr_review(self, review_data, pull_request_id, reviewer_id):
-            """Add a new PR review"""
-            # Check if we have a valid connection
-            if not hasattr(self, 'conn') or not self.conn:
-                logger.warning("Database operation skipped due to missing connection")
+        
+        
+    def add_pr_review(self, review_data, pull_request_id, reviewer_id):
+        """Add a new PR review"""
+        # Check if we have a valid connection
+        if not hasattr(self, 'conn') or not self.conn:
+            logger.warning("Database operation skipped due to missing connection")
+            return None
+            
+        try:
+            # Handle missing data
+            if review_data is None or pull_request_id is None or reviewer_id is None:
+                logger.error("Missing required data for PR review")
                 return None
                 
-            try:
-                # Handle missing data
-                if review_data is None or pull_request_id is None or reviewer_id is None:
-                    logger.error("Missing required data for PR review")
-                    return None
-                    
-                github_id = review_data.get('id')
-                if github_id is None:
-                    logger.error("Review github_id is missing")
-                    return None
-                    
-                # Get state and submitted_at with defaults
-                state = str(review_data.get('state', 'COMMENTED'))
-                submitted_at = review_data.get('submitted_at', datetime.now().isoformat())
+            github_id = review_data.get('id')
+            if github_id is None:
+                logger.error("Review github_id is missing")
+                return None
                 
-                # Check if review exists
+            # Get state and submitted_at with defaults
+            state = str(review_data.get('state', 'COMMENTED'))
+            submitted_at = review_data.get('submitted_at', datetime.now().isoformat())
+            
+            # Check if review exists
+            self.cursor.execute(
+                "SELECT id FROM pr_reviews WHERE github_id = ?", 
+                (github_id,)
+            )
+            result = self.cursor.fetchone()
+            
+            if result:
+                # Review exists, update it
+                review_id = result[0]
                 self.cursor.execute(
-                    "SELECT id FROM pr_reviews WHERE github_id = ?", 
-                    (github_id,)
-                )
-                result = self.cursor.fetchone()
-                
-                if result:
-                    # Review exists, update it
-                    review_id = result[0]
-                    self.cursor.execute(
-                        "UPDATE pr_reviews SET state = ? WHERE id = ?", 
-                        (state, review_id)
-                    )
-                    self.conn.commit()
-                    
-                    # Update last activity on PR
-                    self.cursor.execute(
-                        "UPDATE pull_requests SET last_activity_at = ?, is_stale = 0 WHERE id = ?", 
-                        (submitted_at, pull_request_id)
-                    )
-                    self.conn.commit()
-                    return review_id
-                
-                # Review doesn't exist, create it
-                logger.debug(f"Creating review: github_id={github_id}, pr_id={pull_request_id}, reviewer_id={reviewer_id}")
-                
-                self.cursor.execute(
-                    """INSERT INTO pr_reviews 
-                       (github_id, pull_request_id, reviewer_id, state, submitted_at) 
-                       VALUES (?, ?, ?, ?, ?)""", 
-                    (github_id, pull_request_id, reviewer_id, state, submitted_at)
+                    "UPDATE pr_reviews SET state = ? WHERE id = ?", 
+                    (state, review_id)
                 )
                 self.conn.commit()
-                
-                # Get the new ID
-                review_id = self.cursor.lastrowid
                 
                 # Update last activity on PR
                 self.cursor.execute(
@@ -442,15 +458,39 @@ class DatabaseHandler:
                     (submitted_at, pull_request_id)
                 )
                 self.conn.commit()
-                
                 return review_id
-                
-            except Exception as e:
-                logger.error(f"Error in add_pr_review: {str(e)}")
-                logger.error(f"Review data that caused error: {review_data}")
-                if hasattr(self, 'conn') and self.conn:
-                    self.conn.rollback()
-                return None
+            
+            # Review doesn't exist, create it
+            logger.debug(f"Creating review: github_id={github_id}, pr_id={pull_request_id}, reviewer_id={reviewer_id}")
+            
+            # SQL Server approach to get the last inserted ID
+            self.cursor.execute(
+                """INSERT INTO pr_reviews 
+                   (github_id, pull_request_id, reviewer_id, state, submitted_at) 
+                   OUTPUT INSERTED.id
+                   VALUES (?, ?, ?, ?, ?)""", 
+                (github_id, pull_request_id, reviewer_id, state, submitted_at)
+            )
+            
+            # Get the ID directly from the OUTPUT clause
+            review_id = self.cursor.fetchone()[0]
+            self.conn.commit()
+            
+            # Update last activity on PR
+            self.cursor.execute(
+                "UPDATE pull_requests SET last_activity_at = ?, is_stale = 0 WHERE id = ?", 
+                (submitted_at, pull_request_id)
+            )
+            self.conn.commit()
+            
+            return review_id
+            
+        except Exception as e:
+            logger.error(f"Error in add_pr_review: {str(e)}")
+            logger.error(f"Review data that caused error: {review_data}")
+            if hasattr(self, 'conn') and self.conn:
+                self.conn.rollback()
+            return None    
     
     def add_review_comment(self, comment_data, pull_request_id, author_id, review_id=None):
         """Add a review comment"""

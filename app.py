@@ -219,6 +219,25 @@ def process_review(data):
             
         review_id = db.add_pr_review(review_data, pr_id, reviewer_id)
         
+        # Add this new block of code here
+        # Check if review has a body text, and if so, create a comment
+        if review_data.get('body'):
+            # Create comment data from the review with a numeric ID
+            review_github_id = review_data.get('id')
+            # Use some math to create a unique numeric ID based on the review ID
+            # For example, we can add a large number to ensure it's unique
+            comment_github_id = int(review_github_id) + 10000000000
+            
+            comment_data = {
+                'id': comment_github_id,  # Use a numeric ID
+                'body': review_data.get('body'),
+                'created_at': review_data.get('submitted_at'),
+                'updated_at': review_data.get('submitted_at')
+            }
+            
+            # Add the review comment, linking it to the review
+            db.add_review_comment(comment_data, pr_id, reviewer_id, review_id)
+        
         db.close()
         return review_id
     except Exception as e:
