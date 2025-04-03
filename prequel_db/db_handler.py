@@ -1,6 +1,6 @@
 import logging
-from db_models import DatabaseModels
-from db_analytics import DatabaseAnalytics
+from prequel_db.db_models import DatabaseModels
+from prequel_db.db_analytics import DatabaseAnalytics
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)

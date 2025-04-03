@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from db_connection import DatabaseConnection
+from prequel_db.db_connection import DatabaseConnection
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)

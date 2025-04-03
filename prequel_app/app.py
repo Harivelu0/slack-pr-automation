@@ -3,15 +3,22 @@ import logging
 import threading
 import time
 import os
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
-from github_handler import (
+
+# Add the project root directory to Python's path
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+# Now import from other modules
+from prequel_app.github_handler import (
     verify_github_webhook,
     process_pull_request,
     process_review,
     process_review_comment
 )
-from slack_notifier import send_slack_notification, check_stale_prs
+from prequel_db.db_handler import DatabaseHandler
+from prequel_app.slack_notifier import send_slack_notification, check_stale_prs
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
