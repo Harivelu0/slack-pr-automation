@@ -20,7 +20,7 @@ class DatabaseAnalytics(DatabaseConnection):
             
         try:
             # Calculate the stale date threshold
-            stale_date = (datetime.now() - timedelta(days=days_threshold)).isoformat()
+            stale_date = datetime.now() - timedelta(days=days_threshold)
             
             # Find PRs that have become stale
             self.cursor.execute(

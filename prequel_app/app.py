@@ -6,11 +6,9 @@ import os
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
-
-# Add the project root directory to Python's path
-sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
-
-# Now import from other modules
+# In prequel_app/app.py
+from flask_cors import CORS
+from flask import jsonify
 from prequel_app.github_handler import (
     verify_github_webhook,
     process_pull_request,
@@ -35,6 +33,7 @@ SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
 GITHUB_SECRET = os.getenv('GITHUB_WEBHOOK_SECRET')
 STALE_PR_DAYS = int(os.getenv('STALE_PR_DAYS', '7'))  # Default to 7 days
 
+CORS(app, resources={r"/*": {"origins": "*"}})
 # Background task for checking stale PRs
 def stale_pr_checker():
     """Background thread to check for stale PRs on a schedule"""
@@ -43,6 +42,66 @@ def stale_pr_checker():
         check_stale_prs(STALE_PR_DAYS)
         # Sleep for 1 day (86400 seconds)
         time.sleep(86400)
+
+# API endpoint to get PR metrics
+@app.route('/api/metrics', methods=['GET'])
+def get_pr_metrics():
+    db = DatabaseHandler()
+    metrics = db.get_pr_metrics()
+    db.close()
+    return jsonify(metrics)
+
+# API endpoint to get stale PRs
+@app.route('/api/stale-prs', methods=['GET'])
+def get_stale_prs():
+    db = DatabaseHandler()
+    stale_prs = db.get_stale_prs()
+    db.close()
+    
+    # Convert to JSON-friendly format
+    result = []
+    for pr in stale_prs:
+        pr_id, title, number, html_url, repo_name, username, created_at, last_activity_at = pr
+        result.append({
+            'id': pr_id,
+            'github_id': 0,  # Not available from the query
+            'repository_id': 0,  # Not available from the query
+            'author_id': 0,  # Not available from the query
+            'title': title,
+            'number': number,
+            'state': 'open',
+            'html_url': html_url,
+            'created_at': created_at.isoformat() if created_at else None,
+            'updated_at': last_activity_at.isoformat() if last_activity_at else None,
+            'closed_at': None,
+            'merged_at': None,
+            'is_stale': True,
+            'last_activity_at': last_activity_at.isoformat() if last_activity_at else None,
+            'repository_name': repo_name,
+            'author_name': username
+        })
+    
+    return jsonify(result)
+
+# API endpoint to get repositories
+@app.route('/api/repositories', methods=['GET'])
+def get_repositories():
+    db = DatabaseHandler()
+    # Add a method to your DatabaseHandler to get repositories with PR counts
+    repositories = db.get_repositories_with_pr_counts()
+    db.close()
+    
+    return jsonify(repositories)
+
+# API endpoint to get contributors
+@app.route('/api/contributors', methods=['GET'])
+def get_contributors():
+    db = DatabaseHandler()
+    # Add a method to your DatabaseHandler to get contributors with counts
+    contributors = db.get_contributors_with_counts()
+    db.close()
+    
+    return jsonify(contributors)
 
 # Route handlers
 @app.route('/', methods=['GET'])
