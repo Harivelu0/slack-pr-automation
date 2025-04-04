@@ -1,8 +1,7 @@
-// src/app/layout.tsx
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-import Sidebar from '@/components/sidebar';
+import ClientLayout from '@/components/client-layout';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -17,14 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head />
       <body className={inter.className}>
-        <div className="flex h-screen bg-gray-900">
-          <Sidebar />
-          <main className="flex-1 overflow-auto p-4">
-            {children}
-          </main>
-        </div>
+        <ClientLayout>
+          {children}
+        </ClientLayout>
       </body>
     </html>
   );
