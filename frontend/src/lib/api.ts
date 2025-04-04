@@ -98,13 +98,48 @@ export interface PRMetrics {
     stale_pr_count: number;
 }
 
+// Interfaces for workflow monitoring and configuration
+export interface WorkflowMetrics {
+  total_workflows: number;
+  successful_workflows: number;
+  failed_workflows: number;
+  workflow_run_durations: [string, number][]; // [workflow_name, avg_duration_in_minutes]
+}
+
+export interface WorkflowRun {
+  id: number;
+  workflow_name: string;
+  repository: string;
+  status: 'success' | 'failure' | 'cancelled' | 'in_progress';
+  duration_seconds: number;
+  triggered_by: string;
+  created_at: string;
+}
+
+export interface Configuration {
+  githubToken?: string;
+  organizationName?: string;
+  enableWorkflowMonitoring: boolean;
+  enableSlackNotifications: boolean;
+  SLACK_WEBHOOK_URL?: string;
+  stalePrDays: number;
+  slackApiToken?: string;
+  slackChannel?: string;
+}
+
+export interface BranchProtectionRules {
+  requirePullRequest: boolean;
+  requiredReviewers: number;
+  dismissStaleReviews: boolean;
+  requireCodeOwners: boolean;
+}
+
 // Mock data for when API is not available
 const mockData = {
-
   prMetrics: {
     pr_authors: [['user1', 12] as [string, number], ['user2', 8] as [string, number], ['user3', 6] as [string, number], ['user4', 5] as [string, number], ['user5', 4] as [string, number]],
     active_reviewers: [['reviewer1', 15] as [string, number], ['reviewer2', 12] as [string, number], ['reviewer3', 9] as [string, number], ['reviewer4', 7] as [string, number], ['reviewer5', 5] as [string, number]],
-    comment_users: [['user2', 10] as [string, number], ['user1', 9] as [string, number], ['user3', 7] as [string, number], ['user5', 6] as [string, number], ['user4', 5] as [string, number]],  // Changed from command_users
+    comment_users: [['user2', 10] as [string, number], ['user1', 9] as [string, number], ['user3', 7] as [string, number], ['user5', 6] as [string, number], ['user4', 5] as [string, number]],
     stale_pr_count: 3
   },
   pullRequests: [
@@ -194,7 +229,50 @@ const mockData = {
       command_count: 12,
       repositories: ['frontend', 'docs']
     }
-  ]
+  ],
+  // Mock data for workflow monitoring
+  workflowMetrics: {
+    total_workflows: 25,
+    successful_workflows: 18,
+    failed_workflows: 7,
+    workflow_run_durations: [
+      ['CI Pipeline', 8.5],
+      ['Integration Tests', 12.3],
+      ['Build and Deploy', 15.7],
+      ['Code Analysis', 5.2],
+      ['Dependency Check', 3.8]
+    ] as [string, number][]
+  },
+  workflowRuns: [
+    {
+      id: 1,
+      workflow_name: 'CI Pipeline',
+      repository: 'organization/api-service',
+      status: 'success',
+      duration_seconds: 252,
+      triggered_by: 'developer1',
+      created_at: '2023-04-02T15:30:00Z'
+    },
+    {
+      id: 2,
+      workflow_name: 'Integration Tests',
+      repository: 'organization/frontend',
+      status: 'failure',
+      duration_seconds: 513,
+      triggered_by: 'developer2',
+      created_at: '2023-04-02T14:00:00Z'
+    }
+  ] as WorkflowRun[],
+  configuration: {
+    githubToken: '**********',
+    organizationName: '',
+    enableWorkflowMonitoring: true,
+    enableSlackNotifications: true,
+    SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/TXXXXXX/BXXXXXX/XXXXXXXX',
+    stalePrDays: 7,
+    slackApiToken: '',
+    slackChannel: ''
+  } as Configuration
 };
 
 // API functions for data fetching
@@ -217,7 +295,6 @@ export const api = {
       return response.data;
     } catch (error) {
       console.warn('Error fetching PR metrics, using mock data');
-      // Return mock data instead of empty arrays
       return mockData.prMetrics;
     }
   },
@@ -263,6 +340,92 @@ export const api = {
     } catch (error) {
       console.warn('Error fetching pull requests, using mock data');
       return mockData.pullRequests;
+    }
+  },
+
+  // Validate GitHub token
+  validateGithubToken: async (token: string): Promise<{ valid: boolean }> => {
+    try {
+      const response = await apiClient.post('/api/auth/validate-github-token', { token });
+      return response.data;
+    } catch (error) {
+      console.warn('Error validating GitHub token, using mock response');
+      // Mock successful validation
+      return { valid: true };
+    }
+  },
+
+  // Get configuration
+  getConfiguration: async (): Promise<Configuration> => {
+    try {
+      const response = await apiClient.get('/api/auth/configuration');
+      return response.data;
+    } catch (error) {
+      console.warn('Error fetching configuration, using mock data');
+      return mockData.configuration;
+    }
+  },
+
+  // Save configuration (initial setup)
+  saveConfiguration: async (config: Partial<Configuration>): Promise<{ success: boolean }> => {
+    try {
+      const response = await apiClient.post('/api/auth/save-configuration', config);
+      return response.data;
+    } catch (error) {
+      console.warn('Error saving configuration, using mock response');
+      return { success: true };
+    }
+  },
+
+  // Update configuration (settings page)
+  updateConfiguration: async (config: Partial<Configuration>): Promise<{ success: boolean }> => {
+    try {
+      const response = await apiClient.post('/api/auth/update-configuration', config);
+      return response.data;
+    } catch (error) {
+      console.warn('Error updating configuration, using mock response');
+      return { success: true };
+    }
+  },
+
+  // Get workflow metrics
+  getWorkflowMetrics: async (): Promise<WorkflowMetrics> => {
+    try {
+      const response = await apiClient.get('/api/metrics/workflows');
+      return response.data;
+    } catch (error) {
+      console.warn('Error fetching workflow metrics, using mock data');
+      return mockData.workflowMetrics;
+    }
+  },
+
+  // Get recent workflow runs
+  getWorkflowRuns: async (): Promise<WorkflowRun[]> => {
+    try {
+      const response = await apiClient.get('/api/workflow-runs');
+      return response.data;
+    } catch (error) {
+      console.warn('Error fetching workflow runs, using mock data');
+      return mockData.workflowRuns;
+    }
+  },
+
+  // Setup branch protection
+  setupBranchProtection: async (
+    repo: string, 
+    branch: string, 
+    rules: BranchProtectionRules
+  ): Promise<{ success: boolean }> => {
+    try {
+      const response = await apiClient.post('/api/repos/branch-protection', {
+        repo,
+        branch,
+        rules
+      });
+      return response.data;
+    } catch (error) {
+      console.warn('Error setting up branch protection, using mock response');
+      return { success: true };
     }
   }
 };

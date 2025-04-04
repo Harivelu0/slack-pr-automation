@@ -7,40 +7,56 @@ import StalePRWidget from '@/components/stale-pr-widget';
 import ContributorsBarChart from '@/components/contributors-bar-chart';
 import ReviewersBarChart from '@/components/reviewers-bar-chart';
 import LoadingSpinner from '@/components/loading-spinner';
+import WelcomePage from '@/components/welcome-page';
 
-export default function Dashboard() {
+export default function Home() {
   const [metrics, setMetrics] = useState<PRMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false);
+  
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        const metricsData = await api.getPRMetrics();
-        setMetrics(metricsData);
-      } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-        setError('Failed to load dashboard data. Please try again later.');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
+    // Check if the user has completed onboarding
+    const hasCompletedOnboarding = localStorage.getItem('onboardingCompleted') === 'true';
+    setOnboardingCompleted(hasCompletedOnboarding);
+    
+    // If onboarding is complete, fetch dashboard data
+    if (hasCompletedOnboarding) {
+      fetchDashboardData();
+    } else {
+      setLoading(false);
+    }
   }, []);
+  
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const metricsData = await api.getPRMetrics();
+      setMetrics(metricsData);
+    } catch (err) {
+      console.error('Error fetching dashboard data:', err);
+      setError('Failed to load dashboard data. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (loading) {
     return <LoadingSpinner />;
   }
-
+  
+  // If onboarding is not completed, show welcome page
+  if (!onboardingCompleted) {
+    return <WelcomePage />;
+  }
+  
   if (error) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <h2 className="text-xl font-semibold text-red-400">Error</h2>
           <p className="mt-2 text-gray-300">{error}</p>
-          <button 
+          <button
             className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
             onClick={() => window.location.reload()}
           >
@@ -68,19 +84,19 @@ export default function Dashboard() {
 
       {/* Stats Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <DashboardCard 
+        <DashboardCard
           title="Total Pull Requests"
           value={dashboardMetrics.pr_authors.reduce((acc, [_, count]) => acc + count, 0)}
           icon="pull-request"
           trend={+5}
         />
-        <DashboardCard 
+        <DashboardCard
           title="Active Reviewers"
           value={dashboardMetrics.active_reviewers.length}
           icon="user"
           trend={+2}
         />
-        <DashboardCard 
+        <DashboardCard
           title="Stale PRs"
           value={dashboardMetrics.stale_pr_count}
           icon="clock"
@@ -103,8 +119,6 @@ export default function Dashboard() {
           <ReviewersBarChart data={dashboardMetrics.active_reviewers} />
         </div>
       </div>
-      
-      
 
       {/* Stale PRs widget */}
       <div className="bg-gray-800 rounded-lg shadow">

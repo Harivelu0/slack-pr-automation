@@ -2,19 +2,23 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  ChartBarIcon, 
-  ClockIcon, 
-  CodeBracketIcon, 
-  UserGroupIcon, 
-  CogIcon
+import {
+  ChartBarIcon,
+  ClockIcon,
+  CodeBracketIcon,
+  UserGroupIcon,
+  CogIcon,
+  ShieldCheckIcon,
+  CircleStackIcon
 } from '@heroicons/react/24/outline';
 
+// Update your existing sidebar navItems array:
 const navItems = [
   { name: 'Dashboard', href: '/', icon: ChartBarIcon },
   { name: 'Stale PRs', href: '/stale-prs', icon: ClockIcon },
   { name: 'Repositories', href: '/repositories', icon: CodeBracketIcon },
   { name: 'Contributors', href: '/contributors', icon: UserGroupIcon },
+  { name: 'Branch Protection', href: '/branch-protection', icon: ShieldCheckIcon }, // Corrected to ShieldCheckIcon
   { name: 'Settings', href: '/settings', icon: CogIcon },
 ];
 
@@ -38,10 +42,10 @@ export default function Sidebar() {
             
             return (
               <li key={item.name}>
-                <Link 
+                <Link
                   href={item.href}
                   className={`flex items-center px-6 py-3 text-sm font-medium rounded-md ${
-                    isActive 
+                    isActive
                       ? 'text-indigo-400 bg-gray-700'
                       : 'text-gray-300 hover:text-indigo-400 hover:bg-gray-700'
                   }`}
